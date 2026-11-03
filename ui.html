@@ -1,0 +1,492 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: var(--figma-color-bg, #fff);
+    --bg2: var(--figma-color-bg-secondary, #f5f5f5);
+    --text: var(--figma-color-text, #1e1e1e);
+    --muted: var(--figma-color-text-secondary, #6b6b6b);
+    --border: var(--figma-color-border, #e3e3e3);
+    --brand: var(--figma-color-bg-brand, #0d99ff);
+    --on-brand: var(--figma-color-text-onbrand, #fff);
+    --danger: var(--figma-color-text-danger, #d32f2f);
+    --warn: var(--figma-color-text-warning, #b26b00);
+    --ok: var(--figma-color-text-success, #14ae5c);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+    font: 12px/1.4 Inter, system-ui, -apple-system, sans-serif;
+  }
+  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+  label { display: block; color: var(--muted); margin: 6px 0 3px; }
+  select, input[type=text], input[type=email], textarea {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px;
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  textarea { resize: vertical; min-height: 48px; }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 0; }
+  .swap { flex: 0 0 auto !important; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 5px; height: 29px; width: 29px; cursor: pointer; }
+  .check { display: flex; align-items: center; gap: 6px; color: var(--text); margin: 5px 0; }
+  .check input { margin: 0; }
+  button.primary {
+    width: 100%; margin-top: 14px; padding: 9px; border: 0; border-radius: 6px;
+    background: var(--brand); color: var(--on-brand); font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.primary:disabled { opacity: .45; cursor: default; }
+  button.link { background: none; border: 0; padding: 0; color: var(--brand); font: inherit; cursor: pointer; }
+  .sel { padding: 8px; background: var(--bg2); border-radius: 6px; color: var(--muted); }
+  .sel strong { color: var(--text); }
+  .quota { display: flex; justify-content: space-between; color: var(--muted); margin-top: 8px; }
+  .bar { height: 4px; border-radius: 2px; background: var(--bg2); overflow: hidden; margin-top: 4px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+  .hidden { display: none !important; }
+  .msg { margin-top: 10px; padding: 8px; border-radius: 6px; background: var(--bg2); }
+  .msg.error { color: var(--danger); }
+  .report ul { margin: 4px 0 0; padding-left: 16px; }
+  .report li { margin: 2px 0; }
+  .warn { color: var(--warn); }
+  .okc { color: var(--ok); }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 12px; }
+</style>
+</head>
+<body>
+  <div class="sel" id="selection">Select a frame to translate.</div>
+
+  <h2>Languages</h2>
+  <div class="row">
+    <div><label for="from">From</label><select id="from"></select></div>
+    <button class="swap" id="swap" title="Swap languages">⇄</button>
+    <div><label for="to">To</label><select id="to"></select></div>
+  </div>
+
+  <h2>Engine</h2>
+  <select id="engine">
+    <option value="mymemory">MyMemory (free, no signup)</option>
+    <option value="libre">LibreTranslate (self-hosted)</option>
+  </select>
+  <div id="mymemoryOpts">
+    <label for="email">Email (optional, raises limit to 50,000 chars/day)</label>
+    <input id="email" type="email" placeholder="you@example.com" />
+  </div>
+  <div id="libreOpts" class="hidden">
+    <label for="libreUrl">Server URL</label>
+    <input id="libreUrl" type="text" placeholder="http://localhost:5000" />
+    <div class="hint">Add this domain to networkAccess in manifest.json.</div>
+    <label for="libreKey">API key (optional)</label>
+    <input id="libreKey" type="text" />
+  </div>
+
+  <h2>Options</h2>
+  <label class="check"><input type="checkbox" id="skipHidden" /> Skip hidden layers</label>
+  <label class="check"><input type="checkbox" id="swapFont" /> Swap font for non-Latin scripts</label>
+  <label class="check"><input type="checkbox" id="fixOverflow" /> Switch overflowing fixed boxes to auto-height</label>
+  <label for="glossary">Don't translate (one term per line)</label>
+  <textarea id="glossary" placeholder="Figma&#10;Acme Pay"></textarea>
+
+  <div class="quota"><span id="quotaText">—</span><button class="link" id="clearCache">Clear cache</button></div>
+  <div class="bar"><i id="quotaBar"></i></div>
+
+  <button class="primary" id="go" disabled>Translate copy</button>
+
+  <div id="progress" class="msg hidden">
+    <div id="progressText">Working…</div>
+    <div class="bar"><i id="progressBar"></i></div>
+  </div>
+  <div id="message" class="msg hidden"></div>
+  <div id="report" class="msg report hidden"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (msg) => parent.postMessage({ pluginMessage: msg }, '*');
+
+const MYMEMORY_URL = 'https://api.mymemory.translated.net/get';
+const CONCURRENCY = 4;
+const RTL = ['ar', 'fa', 'ur', 'he'];
+
+let settings = null;
+let usage = { chars: 0 };
+let selectionCount = 0;
+let busy = false;
+
+// ---------- Settings ----------
+
+const FIELDS = ['from', 'to', 'engine', 'email', 'libreUrl', 'libreKey', 'glossary'];
+const CHECKS = ['skipHidden', 'swapFont', 'fixOverflow'];
+
+function readForm() {
+  const s = {};
+  FIELDS.forEach((f) => (s[f] = $(f).value));
+  s.email = s.email.trim();
+  s.libreUrl = s.libreUrl.trim().replace(/\/+$/, '');
+  CHECKS.forEach((f) => (s[f] = $(f).checked));
+  return s;
+}
+
+function writeForm(s) {
+  FIELDS.forEach((f) => ($(f).value = s[f] || ''));
+  CHECKS.forEach((f) => ($(f).checked = !!s[f]));
+}
+
+function onSettingsChange() {
+  settings = readForm();
+  post({ type: 'save-settings', settings });
+  render();
+}
+
+function render() {
+  const libre = $('engine').value === 'libre';
+  $('mymemoryOpts').classList.toggle('hidden', libre);
+  $('libreOpts').classList.toggle('hidden', !libre);
+  $('go').disabled = busy || selectionCount === 0;
+  $('go').textContent = busy ? 'Translating…' : selectionCount > 1 ? 'Translate ' + selectionCount + ' copies' : 'Translate copy';
+  renderQuota();
+}
+
+function renderQuota() {
+  if ($('engine').value === 'libre') {
+    $('quotaText').textContent = usage.chars.toLocaleString() + ' chars sent today (self-hosted, no limit)';
+    $('quotaBar').style.width = '0';
+    return;
+  }
+  const limit = $('email').value.trim() ? 50000 : 5000;
+  $('quotaText').textContent = usage.chars.toLocaleString() + ' / ' + limit.toLocaleString() + ' chars today';
+  $('quotaBar').style.width = Math.min(100, (usage.chars / limit) * 100) + '%';
+}
+
+// ---------- Protection: placeholders, URLs, glossary ----------
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function buildProtector(glossaryText) {
+  const terms = glossaryText.split('\n').map((t) => t.trim()).filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map((t) => '(?<![\\p{L}\\p{N}])' + escapeRe(t) + '(?![\\p{L}\\p{N}])');
+  const patterns = terms.concat([
+    '\\{\\{[^}]*\\}\\}',           // {{placeholder}}
+    '\\{[^}]*\\}',                 // {placeholder}
+    '%(?:\\d+\\$)?[sdif@]',        // printf-style
+    'https?://\\S+',               // URLs
+    '[\\w.+-]+@[\\w-]+\\.[\\w.]+', // emails
+  ]);
+  return new RegExp(patterns.join('|'), 'gu');
+}
+
+function protect(text, re) {
+  const tokens = [];
+  const out = text.replace(re, (m) => {
+    tokens.push(m);
+    return '{' + (tokens.length - 1) + '}';
+  });
+  return { text: out, tokens };
+}
+
+function restore(text, tokens) {
+  const used = new Set();
+  let out = text.replace(/\{\s*(\d+)\s*\}/g, (m, n) => {
+    const i = Number(n);
+    if (i < tokens.length) { used.add(i); return tokens[i]; }
+    return m;
+  });
+  // A token the engine dropped is appended rather than lost.
+  tokens.forEach((t, i) => { if (!used.has(i)) out += ' ' + t; });
+  return { text: out, lost: used.size < tokens.length };
+}
+
+// ---------- Splitting ----------
+
+const encoder = new TextEncoder();
+const bytes = (s) => encoder.encode(s).length;
+
+/** Split one line into chunks of at most `limit` UTF-8 bytes, at sentence boundaries when possible. */
+function chunkLine(line, limit) {
+  if (bytes(line) <= limit) return [line];
+  const pieces = [];
+  for (const sentence of line.split(/(?<=[.!?。！？؟।])\s+/)) {
+    if (bytes(sentence) <= limit) { pieces.push(sentence); continue; }
+    let cur = '';
+    for (const word of sentence.split(/(\s+)/)) {
+      if (bytes(cur + word) <= limit) { cur += word; continue; }
+      if (cur) pieces.push(cur);
+      cur = word;
+      while (bytes(cur) > limit) {
+        let cut = cur.length;
+        while (bytes(cur.slice(0, cut)) > limit) cut = Math.floor(cut * 0.8);
+        pieces.push(cur.slice(0, cut));
+        cur = cur.slice(cut);
+      }
+    }
+    if (cur) pieces.push(cur);
+  }
+  // Greedily merge small pieces back together.
+  const chunks = [];
+  for (const p of pieces) {
+    const last = chunks[chunks.length - 1];
+    if (last !== undefined && bytes(last + ' ' + p) <= limit) chunks[chunks.length - 1] = last + ' ' + p;
+    else chunks.push(p);
+  }
+  return chunks.map((c) => c.trim()).filter(Boolean);
+}
+
+// ---------- Engines ----------
+
+class QuotaError extends Error {}
+
+const entityDecoder = document.createElement('textarea');
+function decodeEntities(s) {
+  if (!/&[#\w]+;/.test(s)) return s;
+  entityDecoder.innerHTML = s;
+  return entityDecoder.value;
+}
+
+function libreCode(code) {
+  if (code === 'zh-CN') return 'zh';
+  if (code === 'zh-TW') return 'zt';
+  if (code === 'no') return 'nb';
+  return code;
+}
+
+async function translateMyMemory(text, from, to, email) {
+  let url = MYMEMORY_URL + '?q=' + encodeURIComponent(text) + '&langpair=' + encodeURIComponent(from + '|' + to);
+  if (email) url += '&de=' + encodeURIComponent(email);
+  const res = await fetch(url);
+  if (res.status === 429) throw new QuotaError('MyMemory daily limit reached.');
+  if (!res.ok) throw new Error('MyMemory HTTP ' + res.status);
+  const data = await res.json();
+  const status = Number(data.responseStatus);
+  const out = data.responseData && data.responseData.translatedText;
+  if (status === 429 || data.quotaFinished || /MYMEMORY WARNING/i.test(out || '')) {
+    throw new QuotaError('MyMemory daily limit reached.');
+  }
+  if (status !== 200 || typeof out !== 'string') {
+    throw new Error('MyMemory: ' + (data.responseDetails || out || 'status ' + status));
+  }
+  return decodeEntities(out);
+}
+
+async function translateLibre(text, from, to, base, key) {
+  const body = { q: text, source: libreCode(from), target: libreCode(to), format: 'text' };
+  if (key) body.api_key = key;
+  const res = await fetch(base + '/translate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (res.status === 429) throw new QuotaError('LibreTranslate rate limit reached.');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || typeof data.translatedText !== 'string') {
+    throw new Error('LibreTranslate: ' + (data.error || 'HTTP ' + res.status));
+  }
+  return data.translatedText;
+}
+
+// ---------- Orchestration ----------
+
+async function translateAll(strings, s, onProgress) {
+  const engine = s.engine;
+  const limit = engine === 'mymemory' ? 480 : 2000;
+  const call = engine === 'mymemory'
+    ? (t) => translateMyMemory(t, s.from, s.to, s.email)
+    : (t) => translateLibre(t, s.from, s.to, s.libreUrl, s.libreKey);
+  const re = buildProtector(s.glossary || '');
+  const joiner = ['ja', 'zh-CN', 'zh-TW', 'th'].indexOf(s.to) !== -1 ? '' : ' ';
+
+  // Break each string into protected, trimmed chunks; dedupe chunks across strings.
+  const plans = strings.map((src) => {
+    const { text, tokens } = protect(src, re);
+    const parts = text.split(/(\n+)/).map((seg) => {
+      if (/^\n+$/.test(seg) || !seg) return { raw: seg };
+      const m = seg.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      const core = m[2];
+      // Nothing left to translate once placeholders are out (e.g. "{0}" or "{0} · {1}").
+      if (!core || !/\p{L}/u.test(core.replace(/\{\d+\}/g, ''))) return { raw: seg };
+      return { lead: m[1], trail: m[3], chunks: chunkLine(core, limit) };
+    });
+    return { src, tokens, parts };
+  });
+
+  const chunkSet = new Set();
+  plans.forEach((p) => p.parts.forEach((part) => (part.chunks || []).forEach((c) => chunkSet.add(c))));
+  const queue = Array.from(chunkSet);
+  const done = new Map();
+  const failedChunks = new Set();
+  const errors = [];
+  let charsSent = 0;
+  let finished = 0;
+  let stop = false;
+
+  async function worker() {
+    while (queue.length && !stop) {
+      const chunk = queue.shift();
+      try {
+        charsSent += chunk.length;
+        done.set(chunk, await call(chunk));
+      } catch (e) {
+        failedChunks.add(chunk);
+        if (e instanceof QuotaError) {
+          stop = true;
+          errors.push(e.message + ' Partial result kept; rerun tomorrow (cached text is free).');
+        } else if (errors.length < 5) {
+          errors.push(String(e.message || e));
+        }
+      }
+      finished++;
+      onProgress(finished, chunkSet.size);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+  queue.forEach((c) => failedChunks.add(c));
+
+  const translations = {};
+  let lostTokens = 0;
+  for (const p of plans) {
+    let ok = true;
+    const text = p.parts.map((part) => {
+      if (!part.chunks) return part.raw;
+      const out = part.chunks.map((c) => {
+        if (!done.has(c)) { ok = false; return ''; }
+        return done.get(c);
+      });
+      return part.lead + out.join(joiner) + part.trail;
+    }).join('');
+    if (!ok) { translations[p.src] = null; continue; }
+    const r = restore(text, p.tokens);
+    if (r.lost) lostTokens++;
+    translations[p.src] = r.text;
+  }
+  if (lostTokens) errors.push(lostTokens + ' string(s) had protected terms moved by the engine; check them.');
+  return { translations, charsSent, errors };
+}
+
+// ---------- Report ----------
+
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function showReport(r) {
+  const lines = [];
+  lines.push('<strong class="' + (r.failed ? 'warn' : 'okc') + '">' +
+    (r.failed ? 'Done with gaps' : 'Done') + '</strong>');
+  lines.push('<ul>');
+  lines.push('<li>' + r.written + ' text layers translated' + (r.failed ? ', <span class="warn">' + r.failed + ' failed</span>' : '') +
+    (r.skipped ? ', ' + r.skipped + ' skipped (numbers/symbols)' : '') + '</li>');
+  lines.push('<li>' + r.uniqueStrings + ' unique strings, ' + r.charsSent.toLocaleString() + ' chars sent' +
+    (r.cachedCount ? ' (' + r.cachedCount + ' from cache)' : '') + '</li>');
+  r.frames.forEach((f) => lines.push('<li>' + esc(f.name) + '</li>'));
+  if (RTL.indexOf(r.to) !== -1) lines.push('<li>RTL language: left-aligned text was right-aligned.</li>');
+  r.fontSwaps.forEach((f) => lines.push('<li>Font: ' + esc(f) + '</li>'));
+  r.missingFonts.forEach((f) => lines.push('<li class="warn">Missing font: ' + esc(f) + '</li>'));
+  r.errors.forEach((e) => lines.push('<li class="warn">' + esc(e) + '</li>'));
+  lines.push('</ul>');
+  if (r.issueCount) {
+    lines.push('<details><summary>' + r.issueCount + ' layer note(s)</summary><ul>' +
+      r.issues.map((i) => '<li><strong>' + esc(i.name) + '</strong>: ' + esc(i.issue) + '</li>').join('') +
+      (r.issueCount > r.issues.length ? '<li>…</li>' : '') + '</ul></details>');
+  }
+  $('report').innerHTML = lines.join('');
+  $('report').classList.remove('hidden');
+}
+
+function showMessage(text, isError) {
+  $('message').textContent = text;
+  $('message').classList.toggle('error', !!isError);
+  $('message').classList.remove('hidden');
+}
+
+function setProgress(text, frac) {
+  $('progress').classList.remove('hidden');
+  $('progressText').textContent = text;
+  $('progressBar').style.width = Math.round(frac * 100) + '%';
+}
+
+// ---------- Messages from code.ts ----------
+
+let lastCachedCount = 0;
+
+window.onmessage = async (event) => {
+  const msg = event.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'init') {
+    const langs = msg.languages;
+    for (const id of ['from', 'to']) {
+      $(id).innerHTML = Object.keys(langs)
+        .sort((a, b) => langs[a].localeCompare(langs[b]))
+        .map((c) => '<option value="' + c + '">' + esc(langs[c]) + ' (' + c + ')</option>').join('');
+    }
+    settings = msg.settings;
+    usage = msg.usage;
+    writeForm(settings);
+    render();
+  }
+
+  if (msg.type === 'selection') {
+    selectionCount = msg.count;
+    $('selection').innerHTML = msg.count === 0
+      ? 'Select one or more frames to translate.'
+      : '<strong>' + msg.count + '</strong> selected: ' + esc(msg.names.slice(0, 3).join(', ')) + (msg.names.length > 3 ? '…' : '');
+    render();
+  }
+
+  if (msg.type === 'translate') {
+    lastCachedCount = msg.cachedCount;
+    setProgress('Translating ' + msg.missing.length + ' new strings (' + msg.cachedCount + ' cached)…', 0);
+    let result;
+    try {
+      result = await translateAll(msg.missing, settings, (n, total) =>
+        setProgress('Translating… ' + n + ' / ' + total + ' requests', total ? n / total : 1));
+    } catch (e) {
+      result = { translations: {}, charsSent: 0, errors: [String(e.message || e)] };
+      msg.missing.forEach((s) => (result.translations[s] = null));
+    }
+    Object.assign(result.translations, msg.cached);
+    setProgress('Writing text…', 1);
+    post({ type: 'translated', result });
+  }
+
+  if (msg.type === 'report') {
+    busy = false;
+    usage = msg.usage;
+    $('progress').classList.add('hidden');
+    showReport(Object.assign({ cachedCount: lastCachedCount, to: settings.to }, msg));
+    render();
+  }
+
+  if (msg.type === 'error') {
+    busy = false;
+    $('progress').classList.add('hidden');
+    showMessage(msg.message, true);
+    render();
+  }
+};
+
+// ---------- Wiring ----------
+
+FIELDS.concat(CHECKS).forEach((id) => $(id).addEventListener('change', onSettingsChange));
+['email', 'glossary', 'libreUrl', 'libreKey'].forEach((id) => $(id).addEventListener('input', renderQuota));
+
+$('swap').onclick = () => {
+  const f = $('from').value;
+  $('from').value = $('to').value;
+  $('to').value = f;
+  onSettingsChange();
+};
+
+$('go').onclick = () => {
+  settings = readForm();
+  if (settings.from === settings.to) { showMessage('From and To languages are the same.', true); return; }
+  busy = true;
+  $('message').classList.add('hidden');
+  $('report').classList.add('hidden');
+  setProgress('Duplicating frames…', 0);
+  render();
+  post({ type: 'start', settings });
+};
+
+$('clearCache').onclick = () => post({ type: 'clear-cache' });
+
+post({ type: 'init' });
+</script>
+</body>
+</html>

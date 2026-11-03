@@ -1,0 +1,14 @@
+{
+  "name": "free-screen-translator",
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "Figma plugin: duplicate selected frames and translate all their text for free (MyMemory / self-hosted LibreTranslate).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.142.0",
+    "typescript": "^5.9.3"
+  }
+}

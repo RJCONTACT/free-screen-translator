@@ -1,0 +1,14 @@
+{
+  "name": "Free Screen Translator",
+  "id": "1699370917156037806",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["https://api.mymemory.translated.net"],
+    "devAllowedDomains": ["http://localhost:5000"],
+    "reasoning": "Sends the text of the selected frames to MyMemory (or a self-hosted LibreTranslate server) to translate it."
+  }
+}
